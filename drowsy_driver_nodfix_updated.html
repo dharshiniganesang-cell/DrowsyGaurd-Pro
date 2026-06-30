@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrowsyGuard Pro - Driver Safety System</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<!-- jsPDF for trip report -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0a0a; font-family:system-ui,sans-serif; color:#fff; min-height:100vh; }
+
+  /* ── Header ── */
+  .header { background:#111; padding:14px 24px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #1a1a1a; }
+  .logo { width:32px; height:32px; background:#dc2626; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; }
+  .title { font-size:18px; font-weight:600; }
+  .subtitle { font-size:12px; color:#555; margin-top:1px; }
+  .status-pill { margin-left:auto; padding:6px 16px; border-radius:20px; font-size:12px; font-weight:500; }
+  .pill-alert  { background:#052e16; color:#4ade80; border:1px solid #166534; }
+  .pill-drowsy { background:#450a0a; color:#f87171; border:1px solid #991b1b; }
+  .pill-nod    { background:#1e1b4b; color:#a78bfa; border:1px solid #4c1d95; }
+  .pill-noface { background:#1c1917; color:#78716c; border:1px solid #44403c; }
+
+  /* ── Layout ── */
+  .main { display:grid; grid-template-columns:1fr 340px; gap:16px; padding:16px; max-width:1260px; margin:0 auto; }
+
+  /* ── Camera ── */
+  .camera-card { background:#111; border-radius:16px; overflow:hidden; border:1px solid #1a1a1a; position:relative; }
+  .camera-wrap { position:relative; background:#000; aspect-ratio:4/3; }
+  #videoEl { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); display:block; }
+  #canvasEl { position:absolute; top:0; left:0; width:100%; height:100%; transform:scaleX(-1); }
+
+  .corner { position:absolute; width:28px; height:28px; z-index:10; }
+  .corner.tl { top:12px; left:12px;  border-top:2px solid #4ade80; border-left:2px solid #4ade80; }
+  .corner.tr { top:12px; right:12px; border-top:2px solid #4ade80; border-right:2px solid #4ade80; }
+  .corner.bl { bottom:12px; left:12px;  border-bottom:2px solid #4ade80; border-left:2px solid #4ade80; }
+  .corner.br { bottom:12px; right:12px; border-bottom:2px solid #4ade80; border-right:2px solid #4ade80; }
+
+  /* Alert overlay */
+  .alert-overlay { position:absolute; inset:0; background:rgba(220,38,38,0.3); display:none; z-index:20; align-items:center; justify-content:center; flex-direction:column; }
+  .alert-overlay.show { display:flex; animation:flashbg 0.5s ease infinite alternate; }
+  @keyframes flashbg { from{background:rgba(220,38,38,0.2)} to{background:rgba(220,38,38,0.5)} }
+  .alert-text { font-size:28px; font-weight:700; color:#fff; text-shadow:0 0 20px #dc2626; }
+  .alert-sub  { font-size:14px; color:#fca5a5; margin-top:6px; }
+
+  /* Head nod overlay */
+  .nod-overlay { position:absolute; inset:0; background:rgba(109,40,217,0.25); display:none; z-index:19; align-items:flex-end; justify-content:center; padding-bottom:20px; }
+  .nod-overlay.show { display:flex; }
+  .nod-badge { background:#4c1d95; color:#c4b5fd; padding:6px 18px; border-radius:20px; font-size:13px; font-weight:600; border:1px solid #7c3aed; }
+
+  /* Camera footer metrics */
+  .camera-footer { padding:12px 16px; display:flex; gap:12px; background:#0d0d0d; flex-wrap:wrap; }
+  .metric { flex:1; min-width:80px; }
+  .metric-label { font-size:10px; color:#555; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+  .metric-val { font-size:16px; font-weight:600; }
+  .metric-bar { height:4px; background:#1a1a1a; border-radius:2px; margin-top:4px; }
+  .metric-fill { height:100%; border-radius:2px; transition:width 0.1s; }
+
+  /* ── Sidebar ── */
+  .sidebar { display:flex; flex-direction:column; gap:12px; }
+  .card { background:#111; border-radius:16px; padding:16px; border:1px solid #1a1a1a; }
+  .card-title { font-size:11px; color:#555; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:12px; }
+
+  /* Fatigue Score ring */
+  .score-wrap { display:flex; align-items:center; gap:16px; }
+  .score-ring { width:72px; height:72px; flex-shrink:0; position:relative; }
+  .score-ring svg { transform:rotate(-90deg); }
+  .score-num { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; }
+  .score-details { flex:1; }
+  .score-label { font-size:12px; color:#888; margin-bottom:4px; }
+  .score-grade { font-size:20px; font-weight:700; }
+  .score-desc { font-size:11px; color:#555; margin-top:2px; }
+
+  /* Fatigue trend bars */
+  .trend-bars { display:flex; align-items:flex-end; gap:3px; height:36px; margin-top:10px; }
+  .trend-bar { flex:1; border-radius:2px 2px 0 0; min-height:3px; transition:height 0.3s; }
+
+  /* Stat rows */
+  .stat-row { display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid #1a1a1a; }
+  .stat-row:last-child { border-bottom:none; }
+  .stat-label { font-size:13px; color:#888; }
+  .stat-val   { font-size:13px; font-weight:500; }
+
+  /* New stats: head nod */
+  .nod-stat { display:flex; align-items:center; gap:6px; }
+  .nod-dot  { width:8px; height:8px; border-radius:50%; background:#7c3aed; }
+
+  /* Log */
+  .log-item { padding:7px 0; border-bottom:1px solid #1a1a1a; display:flex; justify-content:space-between; font-size:12px; }
+  .log-item:last-child { border-bottom:none; }
+  .log-empty { font-size:12px; color:#444; }
+  .log-warn  { color:#f87171; }
+  .log-nod   { color:#a78bfa; }
+  .log-yawn  { color:#fb923c; }
+  .log-time  { color:#444; font-size:11px; }
+
+  /* Buttons */
+  .btn-row { display:flex; gap:8px; }
+  .btn { flex:1; padding:10px; border-radius:10px; border:none; font-size:12px; font-weight:500; cursor:pointer; transition:all 0.15s; }
+  .btn-start  { background:#166534; color:#4ade80; }
+  .btn-start:hover { background:#14532d; }
+  .btn-stop   { background:#450a0a; color:#f87171; }
+  .btn-stop:hover  { background:#3f0909; }
+  .btn-report { background:#1e1b4b; color:#a78bfa; }
+  .btn-report:hover { background:#1a1748; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .recording-dot { width:8px; height:8px; border-radius:50%; background:#dc2626; display:inline-block; animation:pulse 1s infinite; margin-right:6px; }
+
+  @media(max-width:768px) { .main { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">👁</div>
+  <div>
+    <div class="title">DrowsyGuard Pro</div>
+    <div class="subtitle">Driver Safety Monitoring System</div>
+  </div>
+  <div class="status-pill pill-noface" id="status-pill">● Initializing...</div>
+</div>
+
+<div class="main">
+
+  <!-- Camera -->
+  <div class="camera-card">
+    <div class="camera-wrap">
+      <video id="videoEl" autoplay playsinline></video>
+      <canvas id="canvasEl"></canvas>
+      <div class="corner tl"></div><div class="corner tr"></div>
+      <div class="corner bl"></div><div class="corner br"></div>
+      <div class="alert-overlay" id="alertOverlay">
+        <div class="alert-text">⚠ WAKE UP!</div>
+        <div class="alert-sub" id="alertSub">Drowsiness Detected — Stay Alert!</div>
+      </div>
+      <div class="nod-overlay" id="nodOverlay">
+        <div class="nod-badge">⬇ HEAD TILTED — <span id="nodCountdown">40</span>s remaining</div>
+      </div>
+      <div id="nightSuggest" style="display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);background:#1e1b4b;border:1px solid #4c1d95;color:#c4b5fd;padding:8px 16px;border-radius:20px;font-size:12px;font-weight:500;align-items:center;gap:10px;z-index:25;">
+        🌙 Low light detected
+        <button onclick="toggleNightMode()" style="background:#4c1d95;color:#fff;border:none;padding:4px 10px;border-radius:12px;font-size:11px;cursor:pointer;">Enable Night Mode</button>
+      </div>
+      <div id="voiceCaption" style="display:none;position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(17,17,17,0.9);border:1px solid #4c1d95;color:#fff;padding:8px 18px;border-radius:14px;font-size:14px;font-weight:600;z-index:26;max-width:90%;text-align:center;"></div>
+    </div>
+    <div class="camera-footer">
+      <div class="metric">
+        <div class="metric-label">Eye Openness (EAR)</div>
+        <div class="metric-val" id="earVal" style="color:#4ade80">0.30</div>
+        <div class="metric-bar"><div class="metric-fill" id="earBar" style="width:75%;background:#4ade80"></div></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Eyes Closed</div>
+        <div class="metric-val" id="closedTime" style="color:#888">0.0s</div>
+        <div class="metric-bar"><div class="metric-fill" id="closedBar" style="width:0%;background:#dc2626"></div></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Head Tilt</div>
+        <div class="metric-val" id="headTilt" style="color:#4ade80">0°</div>
+        <div class="metric-bar"><div class="metric-fill" id="tiltBar" style="width:0%;background:#7c3aed"></div></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Nod Countdown</div>
+        <div class="metric-val" id="nodCountdownMetric" style="color:#555">--</div>
+        <div class="metric-bar"><div class="metric-fill" id="nodCountdownBar" style="width:0%;background:#a78bfa"></div></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Lighting</div>
+        <div class="metric-val" id="lightVal" style="color:#888">---</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Status</div>
+        <div class="metric-val" id="statusVal" style="color:#555">No Face</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Fatigue Score -->
+    <div class="card">
+      <div class="card-title">🧠 Live Fatigue Score</div>
+      <div class="score-wrap">
+        <div class="score-ring">
+          <svg width="72" height="72" viewBox="0 0 72 72">
+            <circle cx="36" cy="36" r="30" fill="none" stroke="#1a1a1a" stroke-width="6"/>
+            <circle cx="36" cy="36" r="30" fill="none" stroke="#4ade80" stroke-width="6"
+              stroke-dasharray="188.5" stroke-dashoffset="188.5"
+              id="scoreArc" stroke-linecap="round"/>
+          </svg>
+          <div class="score-num" id="scoreNum">0</div>
+        </div>
+        <div class="score-details">
+          <div class="score-label">Fatigue Level</div>
+          <div class="score-grade" id="scoreGrade" style="color:#4ade80">FRESH</div>
+          <div class="score-desc" id="scoreDesc">All signals normal</div>
+        </div>
+      </div>
+      <div class="trend-bars" id="trendBars">
+        <!-- filled by JS -->
+      </div>
+      <div style="font-size:10px;color:#444;margin-top:4px;">Fatigue trend (last 30 seconds)</div>
+    </div>
+
+    <!-- Session Stats -->
+    <div class="card">
+      <div class="card-title">Session Stats</div>
+      <div class="stat-row">
+        <span class="stat-label">💤 Drowsy Events</span>
+        <span class="stat-val" id="drowsyCount" style="color:#f87171">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">😮 Yawn Events</span>
+        <span class="stat-val" id="yawnCount" style="color:#fb923c">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label"><span class="nod-dot" style="display:inline-block"></span> Head Nods</span>
+        <span class="stat-val" id="nodCount" style="color:#a78bfa">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">⏱ Session Time</span>
+        <span class="stat-val" id="sessionTime">00:00</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">🛡 Safety Score</span>
+        <span class="stat-val" id="safetyScore" style="color:#4ade80">100%</span>
+      </div>
+    </div>
+
+    <!-- Live Log -->
+    <div class="card">
+      <div class="card-title"><span class="recording-dot"></span>Live Alert Log</div>
+      <div id="logList"><div class="log-empty">No alerts yet — Drive safe!</div></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card">
+      <div class="card-title">Controls</div>
+      <div class="btn-row">
+        <button class="btn btn-stop" id="mainBtn" onclick="toggleDetection()">⏹ Stop</button>
+        <button class="btn btn-report" onclick="generateReport()">📄 Trip Report</button>
+      </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn" id="nightModeBtn" style="background:#1c1917;color:#a8a29e;" onclick="toggleNightMode()">🌙 Night Mode: OFF</button>
+      </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn" style="background:#1c1917;color:#a8a29e;" onclick="recalibrate()">🎯 Recalibrate Head Pose</button>
+      </div>
+      <div style="font-size:10px;color:#444;margin-top:6px;">Sit upright and look straight ahead, then tap Recalibrate if false nod alerts occur.</div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn" id="voiceBtn" style="background:#1e1b4b;color:#a78bfa;" onclick="toggleVoice()">🔊 Voice: ON</button>
+      </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn" id="langEnBtn" style="background:#1e1b4b;color:#a78bfa;opacity:1;" onclick="setVoiceLang('en-IN')">English</button>
+        <button class="btn" id="langTaBtn" style="background:#1e1b4b;color:#a78bfa;opacity:0.45;" onclick="setVoiceLang('ta-IN')">தமிழ்</button>
+      </div>
+    </div>
+
+    <!-- How it works -->
+    <div class="card">
+      <div class="card-title">Detections</div>
+      <div style="font-size:12px;color:#666;line-height:1.9;">
+        👁 Eyes closing → EAR drowsiness alert<br>
+        😮 Mouth opening → Yawn fatigue signal<br>
+        ⬇ Head tilting → Nod / nodding alert<br>
+        🧠 Combined score → Fatigue dashboard<br>
+        🌙 Low light → Night mode enhancement<br>
+        📄 End of trip → Auto PDF report
+      </div>
+    </div>
+
+    <!-- Glasses / lens note -->
+    <div class="card">
+      <div class="card-title">👓 Wearing Glasses?</div>
+      <div style="font-size:12px;color:#666;line-height:1.7;">
+        Works with most prescription glasses — MediaPipe tracks eye landmarks under the lens, not the frame.
+        Avoid glare: angle the camera/light so lenses don't reflect bright light directly into the camera, as reflections can hide the eyes.
+        Thick dark sunglasses block eye tracking entirely — switch to clear or photochromic lenses while driving with this system active.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── Constants ──
+const EAR_THRESHOLD  = 0.22;
+const CLOSED_SECONDS = 2.0;
+const YAWN_THRESHOLD = 0.55;
+const YAWN_SECONDS   = 1.5;
+const NOD_THRESHOLD  = 12;   // degrees of forward tilt BELOW the user's own calibrated neutral pose
+const NOD_SECONDS    = 40;   // must hold that tilt for 40 seconds before alarm triggers
+
+const LEFT_EYE  = [362,385,387,263,373,380];
+const RIGHT_EYE = [33,160,158,133,153,144];
+const MOUTH     = [13,14,78,308,82,312];
+// Nose tip & forehead for head pitch
+const NOSE_TIP  = 1;
+const FOREHEAD  = 10;
+
+// ── State ──
+let eyesClosedStart = null;
+let yawnStart       = null;
+let nodStart        = null;
+let lastAlertTime   = 0;
+let drowsyCount = 0, yawnCount = 0, nodCount = 0;
+
+// Head-pitch auto-calibration (fixes false "head nod" triggers for different face/camera setups)
+let calibrationSamples = [];
+let calibratedBaseline = null;   // the user's own neutral head angle
+let calibrationStart   = null;
+const CALIBRATION_SECONDS = 3;   // sample neutral pose for first 3 seconds
+let logs = [];
+let sessionStart = Date.now();
+let running = true;
+
+// Fatigue trend (one sample per second for last 30s)
+let fatigueSamples = [];
+let fatigueScore   = 0;
+
+// Trip event log for PDF
+let tripEvents = [];
+
+// Audio
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+// playBeep now supports escalating duration/volume based on how long a condition has persisted.
+// durationSeconds: how long the eyes/yawn/nod condition has been active — beep grows longer & louder over time.
+function playBeep(freq=880, durationSeconds=0) {
+  try {
+    if (!audioCtx) audioCtx = new AudioCtx();
+
+    // Base beep length 0.4s, growing up to 2.5s max as the condition persists longer.
+    // Every 2 extra seconds of continuous condition adds 0.3s to beep length (capped).
+    const dur = Math.min(2.5, 0.4 + durationSeconds * 0.15);
+    // Volume also escalates slightly (capped) so it feels more urgent over time
+    const vol = Math.min(1.0, 0.6 + durationSeconds * 0.04);
+
+    const osc  = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.frequency.value = freq; osc.type = 'sine';
+    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    osc.start(); osc.stop(audioCtx.currentTime + dur);
+  } catch(e) {}
+}
+
+// Continuous beep loop — runs while eyes are closed, stops the instant eyes open.
+// Beep length grows the longer the eyes stay shut (escalating urgency).
+let eyeBeepInterval = null;
+function startEyeAlarm(getDuration) {
+  if (eyeBeepInterval) return; // already running
+  try { if (!audioCtx) audioCtx = new AudioCtx(); } catch(e) { return; }
+  if (audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+
+  function pulse() {
+    if (audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+    playBeep(920, getDuration());
+  }
+  pulse(); // beep immediately
+  eyeBeepInterval = setInterval(pulse, 700); // repeat every 700ms while eyes stay closed
+}
+function stopEyeAlarm() {
+  if (eyeBeepInterval) { clearInterval(eyeBeepInterval); eyeBeepInterval = null; }
+}
+
+// Continuous beep loop for head nod — same escalating pattern, stops when head lifts
+let nodBeepInterval = null;
+function startNodAlarm(getDuration) {
+  if (nodBeepInterval) return;
+  try { if (!audioCtx) audioCtx = new AudioCtx(); } catch(e) { return; }
+  if (audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+
+  function pulse() {
+    if (audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+    playBeep(660, getDuration());
+  }
+  pulse();
+  nodBeepInterval = setInterval(pulse, 900);
+}
+function stopNodAlarm() {
+  if (nodBeepInterval) { clearInterval(nodBeepInterval); nodBeepInterval = null; }
+}
+
+// Continuous beep loop for yawning — escalates the longer the yawn/mouth stays open
+let yawnBeepInterval = null;
+function startYawnAlarm(getDuration) {
+  if (yawnBeepInterval) return;
+  try { if (!audioCtx) audioCtx = new AudioCtx(); } catch(e) { return; }
+  if (audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+
+  function pulse() {
+    if (audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+    playBeep(440, getDuration());
+  }
+  pulse();
+  yawnBeepInterval = setInterval(pulse, 800);
+}
+function stopYawnAlarm() {
+  if (yawnBeepInterval) { clearInterval(yawnBeepInterval); yawnBeepInterval = null; }
+}
+
+// ── Voice alert (Web Speech API) — English + Tamil ──
+let voiceEnabled = true;
+let voiceLang = 'en-IN'; // 'en-IN' or 'ta-IN'
+let lastSpeakTime = { drowsy: 0, nod: 0, yawn: 0 };
+const VOICE_REPEAT_GAP = 5; // seconds between repeated spoken warnings for the same alert type
+
+const VOICE_MESSAGES = {
+  'en-IN': {
+    drowsy: 'You are in danger. Wake up.',
+    nod:    'Sit up straight. You are tilting.',
+    yawn:   'You seem tired. Consider a break.'
+  },
+  'ta-IN': {
+    drowsy: 'நீங்கள் ஆபத்தில் இருக்கிறீர்கள். எழுந்திருங்கள்.',
+    nod:    'நேராக உட்காருங்கள். தலை சாய்கிறது.',
+    yawn:   'நீங்கள் சோர்வாக இருக்கிறீர்கள். ஓய்வு எடுங்கள்.'
+  }
+};
+
+function speak(key) {
+  try {
+    if (!voiceEnabled) return;
+    if (!('speechSynthesis' in window)) return;
+    const now = Date.now() / 1000;
+    if (now - (lastSpeakTime[key] || 0) < VOICE_REPEAT_GAP) return;
+    const text = (VOICE_MESSAGES[voiceLang] && VOICE_MESSAGES[voiceLang][key]) || VOICE_MESSAGES['en-IN'][key];
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = voiceLang;
+    utter.rate = 1.0; utter.pitch = 1.0; utter.volume = 1.0;
+    window.speechSynthesis.speak(utter);
+    lastSpeakTime[key] = now;
+    // Show Tamil/English text on screen too, as a fallback if the device has no matching voice installed
+    showVoiceCaption(text);
+  } catch(e) {}
+}
+
+function showVoiceCaption(text) {
+  const cap = document.getElementById('voiceCaption');
+  if (!cap) return;
+  cap.textContent = '🗣 ' + text;
+  cap.style.display = 'block';
+  clearTimeout(showVoiceCaption._t);
+  showVoiceCaption._t = setTimeout(() => { cap.style.display = 'none'; }, 3500);
+}
+
+function toggleVoice() {
+  voiceEnabled = !voiceEnabled;
+  const btn = document.getElementById('voiceBtn');
+  if (btn) btn.textContent = voiceEnabled ? '🔊 Voice: ON' : '🔇 Voice: OFF';
+  if (!voiceEnabled) { try { window.speechSynthesis.cancel(); } catch(e) {} }
+}
+
+function setVoiceLang(lang) {
+  voiceLang = lang;
+  const enBtn = document.getElementById('langEnBtn');
+  const taBtn = document.getElementById('langTaBtn');
+  if (enBtn) enBtn.style.opacity = lang === 'en-IN' ? '1' : '0.45';
+  if (taBtn) taBtn.style.opacity = lang === 'ta-IN' ? '1' : '0.45';
+}
+
+// ── Math helpers ──
+function dist(a, b) { return Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2); }
+
+function calcEAR(lm, indices) {
+  const p = indices.map(i => lm[i]);
+  const v1 = dist(p[1], p[5]);
+  const v2 = dist(p[2], p[4]);
+  const h  = dist(p[0], p[3]);
+  return (v1 + v2) / (2 * h + 1e-6);
+}
+function calcMAR(lm) {
+  const p = MOUTH.map(i => lm[i]);
+  return dist(p[0], p[1]) / (dist(p[2], p[3]) + 1e-6);
+}
+
+// Head pitch: RAW angle of nose-tip relative to forehead on Y axis (no baseline subtracted here).
+// Calibration against the user's own neutral pose happens separately in the main loop.
+function calcRawHeadAngle(lm) {
+  const nose = lm[NOSE_TIP];
+  const fore = lm[FOREHEAD];
+  const dy = nose.y - fore.y;
+  const dx = nose.x - fore.x;
+  return Math.atan2(dy, Math.abs(dx) + 0.001) * (180/Math.PI);
+}
+
+// ── Fatigue Score logic ──
+// Combines: EAR closures, yawns, nods into 0-100 score
+function computeFatigue(ear, eyesClosed, nodding) {
+  let score = 0;
+  // Eye component (0-40)
+  score += Math.min(40, drowsyCount * 8);
+  // Yawn component (0-30)
+  score += Math.min(30, yawnCount * 6);
+  // Nod component (0-30)
+  score += Math.min(30, nodCount * 10);
+  return Math.min(100, score);
+}
+
+function getFatigueGrade(score) {
+  if (score < 15) return {grade:'FRESH',    color:'#4ade80', desc:'All signals normal'};
+  if (score < 35) return {grade:'MILD',     color:'#a3e635', desc:'Light fatigue detected'};
+  if (score < 55) return {grade:'MODERATE', color:'#fb923c', desc:'Consider taking a break'};
+  if (score < 75) return {grade:'HIGH',     color:'#f87171', desc:'Pull over soon!'};
+  return              {grade:'CRITICAL',  color:'#dc2626', desc:'Stop driving immediately!'};
+}
+
+function updateFatigueUI(score) {
+  const arc = document.getElementById('scoreArc');
+  const circumference = 188.5;
+  const offset = circumference - (score / 100) * circumference;
+  const {grade, color, desc} = getFatigueGrade(score);
+  arc.style.stroke = color;
+  arc.style.strokeDashoffset = offset;
+  document.getElementById('scoreNum').textContent  = score;
+  document.getElementById('scoreNum').style.color  = color;
+  document.getElementById('scoreGrade').textContent = grade;
+  document.getElementById('scoreGrade').style.color = color;
+  document.getElementById('scoreDesc').textContent  = desc;
+}
+
+// Update trend bar chart every second
+setInterval(() => {
+  fatigueSamples.push(fatigueScore);
+  if (fatigueSamples.length > 30) fatigueSamples.shift();
+
+  const bars = document.getElementById('trendBars');
+  const max  = Math.max(...fatigueSamples, 1);
+  bars.innerHTML = fatigueSamples.map(v => {
+    const pct = Math.round((v / max) * 100);
+    const {color} = getFatigueGrade(v);
+    return `<div class="trend-bar" style="height:${Math.max(3,pct)}%;background:${color}22;border-top:2px solid ${color}"></div>`;
+  }).join('');
+}, 1000);
+
+// ── Session time ──
+function updateSessionTime() {
+  const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
+  const m = String(Math.floor(elapsed/60)).padStart(2,'0');
+  const s = String(elapsed%60).padStart(2,'0');
+  document.getElementById('sessionTime').textContent = `${m}:${s}`;
+}
+setInterval(updateSessionTime, 1000);
+
+// ── Log helper ──
+function addLog(msg, type) {
+  const time = new Date().toLocaleTimeString();
+  logs.unshift({msg, time, type});
+  tripEvents.push({msg, time, type}); // for PDF
+  if (logs.length > 6) logs.pop();
+  const el = document.getElementById('logList');
+  el.innerHTML = logs.map(l => {
+    const cls = l.type==='warn' ? 'log-warn' : l.type==='nod' ? 'log-nod' : l.type==='yawn' ? 'log-yawn' : '';
+    return `<div class="log-item"><span class="${cls}">${l.msg}</span><span class="log-time">${l.time}</span></div>`;
+  }).join('');
+}
+
+// ── Safety score ──
+function updateSafetyScore() {
+  const score = Math.max(0, 100 - (drowsyCount*10) - (yawnCount*5) - (nodCount*8));
+  const el = document.getElementById('safetyScore');
+  el.textContent = score + '%';
+  el.style.color = score > 70 ? '#4ade80' : score > 40 ? '#fb923c' : '#f87171';
+}
+
+// ── MediaPipe ──
+const video  = document.getElementById('videoEl');
+const canvas = document.getElementById('canvasEl');
+const ctx    = canvas.getContext('2d');
+
+// Hidden processing canvas — brightens/enhances the frame BEFORE sending to MediaPipe.
+// This is what makes low-light detection more reliable (face mesh sees a brighter image
+// even though the visible video can stay natural, or also be boosted — see nightMode below).
+const procCanvas = document.createElement('canvas');
+const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
+
+// Night Mode state
+let nightMode = false;          // user toggle
+let autoNightDetect = true;     // auto-detect darkness and suggest night mode
+let currentBrightness = 128;    // 0-255 estimated average brightness of frame
+let nightModeSuggested = false;
+
+// Analyze average luminance of a frame to estimate ambient brightness
+function estimateBrightness(imageData) {
+  const data = imageData.data;
+  let total = 0;
+  const sampleStep = 40; // sample every Nth pixel for speed, no need to scan all
+  let count = 0;
+  for (let i = 0; i < data.length; i += sampleStep * 4) {
+    // luminance formula
+    total += 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+    count++;
+  }
+  return count > 0 ? total / count : 128;
+}
+
+// Apply brightness/contrast/gamma enhancement to a canvas context in place
+function enhanceFrame(srcCtx, w, h, brightnessBoost, contrastBoost) {
+  const imgData = srcCtx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+  const contrast = (259 * (contrastBoost + 255)) / (255 * (259 - contrastBoost));
+  for (let i = 0; i < d.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      let v = d[i+c];
+      v = v + brightnessBoost;               // brighten
+      v = contrast * (v - 128) + 128;         // boost contrast so face edges stay visible
+      d[i+c] = Math.max(0, Math.min(255, v));
+    }
+  }
+  srcCtx.putImageData(imgData, 0, 0);
+  return imgData;
+}
+
+const faceMesh = new FaceMesh({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
+faceMesh.setOptions({ maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+
+faceMesh.onResults(results => {
+  if (!running) return;
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const pill = document.getElementById('status-pill');
+  const now  = Date.now() / 1000;
+
+  if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+    const lm = results.multiFaceLandmarks[0];
+    const w = canvas.width, h = canvas.height;
+
+    const earL = calcEAR(lm, LEFT_EYE);
+    const earR = calcEAR(lm, RIGHT_EYE);
+    const ear  = (earL + earR) / 2;
+    const mar  = calcMAR(lm);
+    const rawAngle = calcRawHeadAngle(lm);
+
+    // ── Auto-calibrate neutral head pose for the first few seconds ──
+    if (calibratedBaseline === null) {
+      if (calibrationStart === null) calibrationStart = now;
+      calibrationSamples.push(rawAngle);
+      const calibElapsed = now - calibrationStart;
+
+      if (calibElapsed < CALIBRATION_SECONDS) {
+        // Show calibration status instead of nod detection while sampling
+        document.getElementById('headTilt').textContent = 'Calib...';
+        document.getElementById('headTilt').style.color = '#fbbf24';
+        document.getElementById('tiltBar').style.width = Math.round((calibElapsed/CALIBRATION_SECONDS)*100) + '%';
+        document.getElementById('tiltBar').style.background = '#fbbf24';
+      } else {
+        // Use median of samples as baseline — robust against a few noisy frames
+        const sorted = [...calibrationSamples].sort((a,b) => a-b);
+        calibratedBaseline = sorted[Math.floor(sorted.length/2)];
+      }
+    }
+
+    // tilt = how far CURRENT angle has dropped below the user's OWN calibrated neutral angle
+    const tilt = calibratedBaseline !== null ? Math.max(0, calibratedBaseline - rawAngle) : 0;
+
+    // ── Draw eye outlines ──
+    const eyeColor = ear > EAR_THRESHOLD ? '#4ade80' : '#ef4444';
+    [LEFT_EYE, RIGHT_EYE].forEach(indices => {
+      ctx.beginPath();
+      indices.forEach((idx, i) => {
+        const x = lm[idx].x * w, y = lm[idx].y * h;
+        i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+      });
+      ctx.closePath();
+      ctx.strokeStyle = eyeColor;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    });
+
+    // ── Draw nose tilt indicator ──
+    const nx = lm[NOSE_TIP].x * w, ny = lm[NOSE_TIP].y * h;
+    const fx = lm[FOREHEAD].x  * w, fy = lm[FOREHEAD].y  * h;
+    ctx.beginPath();
+    ctx.moveTo(fx, fy); ctx.lineTo(nx, ny);
+    ctx.strokeStyle = tilt > NOD_THRESHOLD ? '#a78bfa' : '#334155';
+    ctx.lineWidth = 2; ctx.stroke();
+
+    // ── EAR metric ──
+    const earPct = Math.min(ear / 0.4 * 100, 100);
+    document.getElementById('earVal').textContent = ear.toFixed(3);
+    document.getElementById('earVal').style.color = ear > EAR_THRESHOLD ? '#4ade80' : '#ef4444';
+    document.getElementById('earBar').style.width = earPct + '%';
+    document.getElementById('earBar').style.background = ear > EAR_THRESHOLD ? '#4ade80' : '#ef4444';
+
+    // ── Head tilt metric ──
+    document.getElementById('headTilt').textContent = Math.round(tilt) + '°';
+    document.getElementById('headTilt').style.color = tilt > NOD_THRESHOLD ? '#a78bfa' : '#4ade80';
+    document.getElementById('tiltBar').style.width  = Math.min(tilt / NOD_THRESHOLD * 100, 100) + '%';
+
+    // ── Eyes closed logic ──
+    let eyesDrowsy = false;
+    if (ear < EAR_THRESHOLD) {
+      if (!eyesClosedStart) eyesClosedStart = now;
+      const closed = now - eyesClosedStart;
+      document.getElementById('closedTime').textContent = closed.toFixed(1) + 's';
+      document.getElementById('closedTime').style.color = '#ef4444';
+      document.getElementById('closedBar').style.width  = Math.min(closed/CLOSED_SECONDS*100, 100) + '%';
+
+      if (closed >= CLOSED_SECONDS) {
+        eyesDrowsy = true;
+        document.getElementById('statusVal').textContent = 'DROWSY';
+        document.getElementById('statusVal').style.color = '#ef4444';
+        pill.className = 'status-pill pill-drowsy';
+        pill.textContent = '● DROWSY';
+        document.getElementById('alertOverlay').classList.add('show');
+        document.getElementById('alertSub').textContent = 'Drowsiness Detected — Stay Alert!';
+        // Continuous beep, growing longer/louder the longer eyes stay shut
+        startEyeAlarm(() => now - eyesClosedStart);
+        speak('drowsy');
+        if (now - lastAlertTime > 3) {
+          drowsyCount++;
+          document.getElementById('drowsyCount').textContent = drowsyCount;
+          addLog('💤 Eyes closed ' + closed.toFixed(1) + 's', 'warn');
+          updateSafetyScore();
+          lastAlertTime = now;
+        }
+      } else {
+        document.getElementById('statusVal').textContent = 'CLOSING';
+        document.getElementById('statusVal').style.color = '#fb923c';
+        pill.className   = 'status-pill pill-noface';
+        pill.textContent = '● Closing...';
+        document.getElementById('alertOverlay').classList.remove('show');
+      }
+    } else {
+      eyesClosedStart = null;
+      stopEyeAlarm(); // eyes open → alarm stops immediately
+      document.getElementById('closedTime').textContent = '0.0s';
+      document.getElementById('closedTime').style.color = '#888';
+      document.getElementById('closedBar').style.width  = '0%';
+      if (!eyesDrowsy) {
+        document.getElementById('alertOverlay').classList.remove('show');
+      }
+    }
+
+    // ── Head nod logic (only runs after calibration completes) ──
+    if (calibratedBaseline !== null && tilt > NOD_THRESHOLD) {
+      if (!nodStart) nodStart = now;
+      const nodDur = now - nodStart;
+      const remaining = Math.max(0, Math.ceil(NOD_SECONDS - nodDur));
+
+      // Always-visible countdown in the camera footer metric
+      const cdMetric = document.getElementById('nodCountdownMetric');
+      const cdBar    = document.getElementById('nodCountdownBar');
+      cdMetric.textContent = nodDur >= NOD_SECONDS ? 'ALERT!' : remaining + 's';
+      cdMetric.style.color = nodDur >= NOD_SECONDS ? '#dc2626' : '#a78bfa';
+      cdBar.style.width = Math.min(100, (nodDur/NOD_SECONDS)*100) + '%';
+      cdBar.style.background = nodDur >= NOD_SECONDS ? '#dc2626' : '#a78bfa';
+
+      // Purple overlay badge also shows countdown as soon as tilt begins
+      document.getElementById('nodOverlay').classList.add('show');
+      document.getElementById('nodCountdown').textContent = nodDur >= NOD_SECONDS ? '⚠ ALERT!' : remaining + 's remaining';
+
+      if (nodDur >= NOD_SECONDS) {
+        document.getElementById('statusVal').textContent = 'NODDING';
+        document.getElementById('statusVal').style.color = '#a78bfa';
+        pill.className   = 'status-pill pill-nod';
+        pill.textContent = '● HEAD NOD';
+        if (!document.getElementById('alertOverlay').classList.contains('show')) {
+          document.getElementById('alertOverlay').classList.add('show');
+          document.getElementById('alertSub').textContent = 'Head Tilted 40s — Pull Over!';
+        }
+        // Continuous beep — keeps firing every cycle as long as tilt > threshold.
+        // startNodAlarm() internally no-ops if already running, so this is safe to call every frame.
+        startNodAlarm(() => now - nodStart);
+        speak('nod');
+        if (now - lastAlertTime > 4) {
+          nodCount++;
+          document.getElementById('nodCount').textContent = nodCount;
+          addLog('⬇ Head tilted 40s — tilt ' + Math.round(tilt) + '°', 'nod');
+          updateSafetyScore();
+          lastAlertTime = now;
+        }
+      }
+    } else {
+      // Head back to normal position (or never tilted) — clear everything, stop alarm for sure
+      nodStart = null;
+      stopNodAlarm(); // guaranteed stop the instant tilt drops back under threshold
+      document.getElementById('nodOverlay').classList.remove('show');
+      document.getElementById('nodCountdown').textContent = '40s remaining';
+      const cdMetric = document.getElementById('nodCountdownMetric');
+      const cdBar    = document.getElementById('nodCountdownBar');
+      if (cdMetric) { cdMetric.textContent = '--'; cdMetric.style.color = '#555'; }
+      if (cdBar)    { cdBar.style.width = '0%'; }
+    }
+
+    // ── Yawn logic ──
+    if (mar > YAWN_THRESHOLD) {
+      if (!yawnStart) yawnStart = now;
+      const yawnDur = now - yawnStart;
+      if (yawnDur >= YAWN_SECONDS) {
+        // Continuous beep, growing longer/louder the longer the yawn continues
+        startYawnAlarm(() => now - yawnStart);
+        speak('yawn');
+        if (now - lastAlertTime > 3) {
+          yawnCount++;
+          document.getElementById('yawnCount').textContent = yawnCount;
+          addLog('😮 Yawn detected', 'yawn');
+          updateSafetyScore();
+          lastAlertTime = now;
+        }
+      }
+      ctx.fillStyle = '#fb923c';
+      ctx.font = 'bold 15px system-ui';
+      ctx.fillText('YAWN DETECTED', w/2 - 58, 28);
+    } else {
+      yawnStart = null;
+      stopYawnAlarm(); // mouth closed → alarm stops immediately
+    }
+
+    // ── No eyes closed and no nod → clear overlay ──
+    if (ear >= EAR_THRESHOLD && tilt <= NOD_THRESHOLD) {
+      if (!eyesDrowsy) {
+        document.getElementById('alertOverlay').classList.remove('show');
+        if (!document.getElementById('alertOverlay').classList.contains('show')) {
+          document.getElementById('statusVal').textContent = 'ALERT';
+          document.getElementById('statusVal').style.color = '#4ade80';
+          pill.className   = 'status-pill pill-alert';
+          pill.textContent = '● ALERT';
+        }
+      }
+    }
+
+    // ── Update fatigue score ──
+    fatigueScore = computeFatigue(ear, eyesClosedStart, nodStart);
+    updateFatigueUI(fatigueScore);
+
+  } else {
+    // No face detected
+    eyesClosedStart = null; yawnStart = null; nodStart = null;
+    stopEyeAlarm(); stopNodAlarm(); stopYawnAlarm(); try{window.speechSynthesis.cancel();}catch(e){}
+    document.getElementById('earVal').textContent   = '---';
+    document.getElementById('headTilt').textContent = '---';
+    document.getElementById('statusVal').textContent = 'No Face';
+    document.getElementById('statusVal').style.color = '#555';
+    pill.className   = 'status-pill pill-noface';
+    pill.textContent = '● No Face Detected';
+    document.getElementById('alertOverlay').classList.remove('show');
+    document.getElementById('nodOverlay').classList.remove('show');
+    const cdMetric = document.getElementById('nodCountdownMetric');
+    const cdBar    = document.getElementById('nodCountdownBar');
+    if (cdMetric) { cdMetric.textContent = '--'; cdMetric.style.color = '#555'; }
+    if (cdBar)    { cdBar.style.width = '0%'; }
+  }
+});
+
+let frameCount = 0;
+
+const camera = new Camera(video, {
+  onFrame: async () => {
+    if (!video.videoWidth) return;
+
+    procCanvas.width  = video.videoWidth;
+    procCanvas.height = video.videoHeight;
+    procCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
+
+    // Sample brightness every few frames (not every single frame, for performance)
+    frameCount++;
+    if (frameCount % 10 === 0) {
+      const sampleData = procCtx.getImageData(0, 0, procCanvas.width, procCanvas.height);
+      currentBrightness = estimateBrightness(sampleData);
+      updateLightingUI(currentBrightness);
+    }
+
+    if (nightMode) {
+      // Boost brightness + contrast so MediaPipe can find eyes/mouth in low light.
+      // Stronger boost the darker the scene is.
+      const darkness = Math.max(0, 110 - currentBrightness); // how far below "normal" we are
+      const brightnessBoost = Math.min(90, 35 + darkness * 0.6);
+      const contrastBoost   = Math.min(60, 20 + darkness * 0.3);
+      enhanceFrame(procCtx, procCanvas.width, procCanvas.height, brightnessBoost, contrastBoost);
+      await faceMesh.send({image: procCanvas});
+    } else {
+      await faceMesh.send({image: video});
+    }
+  },
+  width: 640, height: 480
+});
+camera.start();
+
+// Update lighting indicator + auto-suggest night mode if it's dark and not already on
+function updateLightingUI(brightness) {
+  const el = document.getElementById('lightVal');
+  if (!el) return;
+  let label, color;
+  if (brightness > 140)      { label = 'Bright';  color = '#4ade80'; }
+  else if (brightness > 90)  { label = 'Normal';  color = '#a3e635'; }
+  else if (brightness > 55)  { label = 'Dim';     color = '#fb923c'; }
+  else                       { label = 'Dark';    color = '#ef4444'; }
+  el.textContent = label;
+  el.style.color = color;
+
+  const suggestBanner = document.getElementById('nightSuggest');
+  if (brightness < 55 && !nightMode && autoNightDetect) {
+    suggestBanner.style.display = 'flex';
+  } else {
+    suggestBanner.style.display = 'none';
+  }
+}
+
+function toggleNightMode() {
+  nightMode = !nightMode;
+  const btn = document.getElementById('nightModeBtn');
+  const videoEl = document.getElementById('videoEl');
+  if (nightMode) {
+    btn.textContent = '🌙 Night Mode: ON';
+    btn.style.background = '#1e1b4b';
+    btn.style.color = '#a78bfa';
+    videoEl.style.filter = 'brightness(1.5) contrast(1.25)'; // visible preview boost too
+    document.getElementById('nightSuggest').style.display = 'none';
+  } else {
+    btn.textContent = '🌙 Night Mode: OFF';
+    btn.style.background = '#1c1917';
+    btn.style.color = '#a8a29e';
+    videoEl.style.filter = 'none';
+  }
+  addLog(nightMode ? '🌙 Night mode enabled' : '☀ Night mode disabled', 'nod');
+}
+
+// ── Toggle detection ──
+function toggleDetection() {
+  running = !running;
+  const btn = document.getElementById('mainBtn');
+  if (running) {
+    btn.textContent = '⏹ Stop';
+    btn.className = 'btn btn-stop';
+  } else {
+    btn.textContent = '▶ Start';
+    btn.className = 'btn btn-start';
+    document.getElementById('alertOverlay').classList.remove('show');
+    document.getElementById('nodOverlay').classList.remove('show');
+    document.getElementById('status-pill').textContent = '● Paused';
+    document.getElementById('status-pill').className = 'status-pill pill-noface';
+    stopEyeAlarm(); stopNodAlarm(); stopYawnAlarm(); try{window.speechSynthesis.cancel();}catch(e){}
+  }
+}
+
+// Reset head-pose calibration — useful if the driver shifts position or false nod alerts happen
+function recalibrate() {
+  calibratedBaseline   = null;
+  calibrationSamples   = [];
+  calibrationStart     = null;
+  nodStart              = null;
+  stopNodAlarm();
+  document.getElementById('nodOverlay').classList.remove('show');
+  const cdMetric = document.getElementById('nodCountdownMetric');
+  const cdBar    = document.getElementById('nodCountdownBar');
+  if (cdMetric) { cdMetric.textContent = '--'; cdMetric.style.color = '#555'; }
+  if (cdBar)    { cdBar.style.width = '0%'; }
+  addLog('🎯 Head pose recalibrated', 'nod');
+}
+
+// ── Trip Report PDF ──
+function generateReport() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  const elapsed   = Math.floor((Date.now() - sessionStart) / 1000);
+  const duration  = `${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
+  const safetyPct = Math.max(0, 100 - (drowsyCount*10) - (yawnCount*5) - (nodCount*8));
+  const {grade}   = getFatigueGrade(fatigueScore);
+  const reportDate = new Date().toLocaleString();
+
+  // Header band
+  doc.setFillColor(17,17,17);
+  doc.rect(0, 0, 210, 40, 'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(20);
+  doc.setFont('helvetica','bold');
+  doc.text('DrowsyGuard Pro', 14, 18);
+  doc.setFontSize(10);
+  doc.setFont('helvetica','normal');
+  doc.text('Driver Safety Trip Report', 14, 27);
+  doc.text(reportDate, 14, 35);
+
+  // Summary section
+  doc.setTextColor(30,30,30);
+  doc.setFontSize(13);
+  doc.setFont('helvetica','bold');
+  doc.text('Trip Summary', 14, 56);
+
+  const col1 = 14, col2 = 110;
+  doc.setFontSize(10);
+  doc.setFont('helvetica','normal');
+  doc.setTextColor(80,80,80);
+
+  const summaryRows = [
+    ['Session Duration', duration],
+    ['Safety Score',     safetyPct + '%'],
+    ['Fatigue Level',    grade],
+    ['Drowsy Events',    String(drowsyCount)],
+    ['Yawn Events',      String(yawnCount)],
+    ['Head Nod Events',  String(nodCount)],
+  ];
+
+  let y = 66;
+  summaryRows.forEach(([label, val]) => {
+    doc.setTextColor(100,100,100); doc.text(label, col1, y);
+    doc.setTextColor(30,30,30);   doc.text(val,   col2, y);
+    doc.setDrawColor(220,220,220);
+    doc.line(14, y+3, 196, y+3);
+    y += 12;
+  });
+
+  // Alert log section
+  y += 8;
+  doc.setFontSize(13);
+  doc.setFont('helvetica','bold');
+  doc.setTextColor(30,30,30);
+  doc.text('Alert Log', 14, y);
+  y += 10;
+
+  if (tripEvents.length === 0) {
+    doc.setFont('helvetica','italic');
+    doc.setFontSize(10);
+    doc.setTextColor(150,150,150);
+    doc.text('No alerts recorded — excellent drive!', 14, y);
+  } else {
+    doc.setFontSize(9);
+    doc.setFont('helvetica','normal');
+    tripEvents.forEach(ev => {
+      const color = ev.type==='warn' ? [220,38,38] : ev.type==='nod' ? [109,40,217] : [234,88,12];
+      doc.setTextColor(...color);
+      doc.text(ev.msg, col1, y);
+      doc.setTextColor(150,150,150);
+      doc.text(ev.time, col2, y);
+      y += 9;
+      if (y > 270) { doc.addPage(); y = 20; }
+    });
+  }
+
+  // Footer
+  doc.setFontSize(8);
+  doc.setTextColor(180,180,180);
+  doc.text('Generated by DrowsyGuard Pro — Driver Safety Monitoring System', 14, 287);
+
+  doc.save(`DrowsyGuard_TripReport_${new Date().toISOString().slice(0,10)}.pdf`);
+}
+</script>
+</body>
+</html>
